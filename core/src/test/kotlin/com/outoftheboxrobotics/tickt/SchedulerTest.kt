@@ -10,16 +10,16 @@ class SchedulerTest {
     private suspend fun TicketScheduler.runTicket(vararg required: TicketKey, block: suspend () -> Unit) =
         runTicket(Ticket(required.asList().toNonEmptyListOrNull()!!, block))
 
+    // Runs two tickets that use different keys
     @Test
     fun noConflictTest(): Unit = runTimeoutBlocking {
         val scheduler = TicketScheduler(allTestKeys)
 
+        // Flags to check if the tickets ran
         var ab = false
         var cd = false
 
-        launch {
-            scheduler.runScheduler()
-        }
+        launch { scheduler.runScheduler() }
 
         coroutineScope {
             launch {
@@ -27,6 +27,7 @@ class SchedulerTest {
                     ab = true
                 }
 
+                // Should finish successfully
                 assertNotNull(res, "Interrupted ticket AB")
             }
 
@@ -34,6 +35,7 @@ class SchedulerTest {
                 cd = true
             }
 
+            // Should finish successfully
             assertNotNull(res, "Interrupted ticket CD")
         }
 
@@ -43,6 +45,7 @@ class SchedulerTest {
         scheduler.cancel()
     }
 
+    // Runs two tickets that overlap in requirements
     @Test
     fun singleOverlapConflictTest(): Unit = runTimeoutBlocking {
         val scheduler = TicketScheduler(allTestKeys)
@@ -52,6 +55,7 @@ class SchedulerTest {
         launch { scheduler.runScheduler() }
 
         coroutineScope {
+            // Used to make sure the first ticket starts before the second
             val barrier = CyclicBarrier(2)
 
             launch {
@@ -61,6 +65,7 @@ class SchedulerTest {
                     delay(Long.MAX_VALUE)
                 }
 
+                // Should be cancelled
                 assertNull(res, "AB not cancelled")
             }
 
@@ -78,6 +83,7 @@ class SchedulerTest {
         scheduler.cancel()
     }
 
+    // Schedules the same ticket twice. All should succeed, but action should only run once.
     @Test
     fun duplicateTicketTest() = runTimeoutBlocking {
         val scheduler = TicketScheduler(allTestKeys)
@@ -106,6 +112,7 @@ class SchedulerTest {
         scheduler.cancel()
     }
 
+    // Schedules conflicting tickets while one is in queue. The queued ticket should be replaced.
     @Test
     fun queueOverlapTest() = runTimeoutBlocking {
         val scheduler = TicketScheduler(allTestKeys)
@@ -120,6 +127,7 @@ class SchedulerTest {
 
             launch {
                 scheduler.runTicket(TestKeys.A) {
+                    // Forces other tickets to stay in queue until startTaskBarrier is reached
                     withContext(NonCancellable) {
                         stepBarrier.await()
                         startTaskBarrier.await()
