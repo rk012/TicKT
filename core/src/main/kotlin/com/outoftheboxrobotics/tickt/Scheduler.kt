@@ -41,7 +41,14 @@ internal class TicketScheduler(
             when(val status = iter.next()) {
                 is SchedulerStatus.QueueTicket ->
                     if (status.ticket !in active) {
-                        queued.removeIf { (it.requirements intersect status.ticket.requirements).isNotEmpty() }
+                        queued.removeIf {
+                            val shouldRemove = (it.requirements intersect status.ticket.requirements).isNotEmpty()
+
+                            if (shouldRemove)
+                                launch { ticketFinishFlow.emit(SchedulerStatus.TicketFinish(it, true)) }
+
+                            shouldRemove
+                        }
                         queued.add(status.ticket)
 
                         active
