@@ -1,4 +1,4 @@
-import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension
 
 buildscript {
     repositories {
@@ -33,8 +33,8 @@ subprojects {
         useJUnitPlatform()
     }
 
-    tasks.withType<KotlinCompile> {
-        kotlinOptions.jvmTarget = "1.8"
+    configure<KotlinJvmProjectExtension> {
+        jvmToolchain(11)
     }
 
     configure<PublishingExtension> {

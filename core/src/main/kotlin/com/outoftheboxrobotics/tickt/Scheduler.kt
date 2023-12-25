@@ -2,10 +2,9 @@ package com.outoftheboxrobotics.tickt
 
 import arrow.core.Nel
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.takeWhile
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 
@@ -24,17 +23,22 @@ internal class TicketScheduler(
     private sealed interface SchedulerStatus {
         data class QueueTicket(val ticket: Ticket) : SchedulerStatus
         data class TicketFinish(val ticket: Ticket, val cancelled: Boolean) : SchedulerStatus
-        data object StopScheduler : SchedulerStatus
     }
 
-    private val statusFlow = MutableSharedFlow<SchedulerStatus>()
+    // Channel is used here because the scheduler is the only observer
+    private val statusChannel = Channel<SchedulerStatus>()
+
+    // Flow is used here because multiple coroutines observe this to wait for task completion
+    private val ticketFinishFlow = MutableSharedFlow<SchedulerStatus.TicketFinish>()
 
     private val queued = mutableSetOf<Ticket>()
     private val active = mutableMapOf<Ticket, Job>()
 
     internal suspend fun runScheduler() = coroutineScope {
-        statusFlow.takeWhile { it !is SchedulerStatus.StopScheduler }.collect { status ->
-            when(status) {
+        val iter = statusChannel.iterator()
+
+        while (iter.hasNext()) {
+            when(val status = iter.next()) {
                 is SchedulerStatus.QueueTicket ->
                     if (status.ticket !in active) {
                         queued.removeIf { (it.requirements intersect status.ticket.requirements).isNotEmpty() }
@@ -45,11 +49,9 @@ internal class TicketScheduler(
                             .forEach { it.value.cancel() }
                     }
 
-                    else return@collect
+                    else continue
 
                 is SchedulerStatus.TicketFinish -> active.remove(status.ticket)
-
-                is SchedulerStatus.StopScheduler -> error("StopScheduler in runScheduler status collector")
             }
 
             queued.forEach { ticket ->
@@ -60,7 +62,9 @@ internal class TicketScheduler(
 
                     launch {
                         job.join()
-                        statusFlow.emit(SchedulerStatus.TicketFinish(ticket, job.isCancelled))
+                        val finish = SchedulerStatus.TicketFinish(ticket, job.isCancelled)
+                        statusChannel.send(finish)
+                        ticketFinishFlow.emit(finish)
                     }
                 }
             }
@@ -69,16 +73,16 @@ internal class TicketScheduler(
         }
     }
 
-    internal suspend fun cancel() = statusFlow.emit(SchedulerStatus.StopScheduler)
+    internal fun cancel() = statusChannel.cancel()
 
     internal suspend fun runTicket(ticket: Ticket) = coroutineScope {
-        require(ticket.requirements.containsAll(availableKeys)) { "Keys ${ticket.requirements} not all available in current context" }
+        require(availableKeys.containsAll(ticket.requirements)) { "Keys ${ticket.requirements} not all available in current context" }
 
         val isCancelled = async {
-            statusFlow.filterIsInstance<SchedulerStatus.TicketFinish>().first { it.ticket == ticket }.cancelled
+            ticketFinishFlow.first { it.ticket == ticket }.cancelled
         }
 
-        statusFlow.emit(SchedulerStatus.QueueTicket(ticket))
+        statusChannel.send(SchedulerStatus.QueueTicket(ticket))
 
         if (isCancelled.await()) null else Unit
     }
