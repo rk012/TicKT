@@ -24,7 +24,12 @@ class Ticket(
     val action: suspend () -> Unit
 )
 
-internal class TicketScheduler(
+/**
+ * A scheduler for running [Tickets][Ticket] that can be added to a coroutine context.
+ *
+ * Note that you usually don't need to create this yourself - use [ticketSchedulerContext] instead.
+ */
+class TicketScheduler(
     private val availableKeys: Nel<TicketKey>
 ): AbstractCoroutineContextElement(TicketScheduler) {
     companion object Key : CoroutineContext.Key<TicketScheduler>
@@ -48,8 +53,10 @@ internal class TicketScheduler(
     // Tasks currently running
     private val active = mutableMapOf<Ticket, Job>()
 
-    // This keeps running until cancel() is called
-    internal suspend fun runScheduler() = coroutineScope {
+    /**
+     * Runs the ticket scheduler indefinitely until [cancel] is called.
+     */
+    suspend fun runScheduler() = coroutineScope {
         val iter = statusChannel.iterator()
 
         while (iter.hasNext()) {
@@ -102,7 +109,10 @@ internal class TicketScheduler(
         }
     }
 
-    internal fun cancel() = statusChannel.cancel()
+    /**
+     * Cancels the scheduler.
+     */
+    fun cancel() = statusChannel.cancel()
 
     // Returns null if the ticket was cancelled, otherwise returns Unit
     internal suspend fun runTicket(ticket: Ticket) = coroutineScope {
