@@ -12,9 +12,13 @@ import kotlin.coroutines.coroutineContext
  *
  * @return The result of [block].
  */
-suspend fun <T> ticketSchedulerContext(available: Nel<TicketKey>, block: suspend CoroutineScope.() -> T) =
+suspend fun <T> ticketSchedulerContext(
+    available: Nel<TicketKey>,
+    schedulingPolicy: SchedulingPolicy = DefaultSchedulingPolicy,
+    block: suspend CoroutineScope.() -> T
+) =
     coroutineScope {
-        val scheduler = TicketScheduler(available)
+        val scheduler = TicketScheduler(available, schedulingPolicy)
 
         launch { scheduler.runScheduler() }
 
@@ -39,9 +43,13 @@ suspend fun runTicket(ticket: Ticket) {
  * @return The result of [block].
  */
 suspend fun <T> withTicket(required: Nel<TicketKey>, block: suspend CoroutineScope.() -> T): T {
+    val scheduler = requireNotNull(coroutineContext[TicketScheduler]) { "No ticket scheduler in coroutine context" }
+
     var res: Option<T> = none()
 
-    runTicket(Ticket(required) { res = ticketSchedulerContext(required, block).some() })
+    runTicket(Ticket(required) {
+        res = ticketSchedulerContext(required, DelegatedSchedulingPolicy(scheduler), block).some()
+    })
 
     return res.getOrElse { error("Uninitialized result with successful ticket") }
 }

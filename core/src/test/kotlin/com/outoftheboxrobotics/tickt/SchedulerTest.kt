@@ -8,7 +8,7 @@ import kotlin.test.*
 
 class SchedulerTest {
     private suspend fun TicketScheduler.runTicket(vararg required: TicketKey, block: suspend () -> Unit) =
-        runTicket(Ticket(required.asList().toNonEmptyListOrNull()!!, block))
+        runTicket(Ticket(required.asList().toNonEmptyListOrNull()!!, action = block))
 
     // Runs two tickets that use different keys
     @Test

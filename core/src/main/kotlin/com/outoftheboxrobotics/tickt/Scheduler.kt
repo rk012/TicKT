@@ -1,6 +1,7 @@
 package com.outoftheboxrobotics.tickt
 
 import arrow.core.Nel
+import arrow.core.toNonEmptyListOrNull
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -21,6 +22,7 @@ interface TicketKey
  */
 class Ticket(
     val requirements: Nel<TicketKey>,
+    val priorityKey: Any? = null,
     val action: suspend () -> Unit
 )
 
@@ -30,7 +32,8 @@ class Ticket(
  * Note that you usually don't need to create this yourself - use [ticketSchedulerContext] instead.
  */
 class TicketScheduler(
-    private val availableKeys: Nel<TicketKey>
+    private val availableKeys: Nel<TicketKey>,
+    var schedulingPolicy: SchedulingPolicy = DefaultSchedulingPolicy
 ): AbstractCoroutineContextElement(TicketScheduler) {
     companion object Key : CoroutineContext.Key<TicketScheduler>
 
@@ -47,6 +50,9 @@ class TicketScheduler(
     private val ticketFinishFlow = MutableSharedFlow<SchedulerStatus.TicketFinish>()
 
 
+    // Tasks waiting for an available slot. Ordered by recency.
+    private val standby = mutableListOf<Ticket>()
+
     // Tasks waiting for other tasks to cancel
     private val queued = mutableSetOf<Ticket>()
 
@@ -61,30 +67,66 @@ class TicketScheduler(
 
         while (iter.hasNext()) {
             when(val status = iter.next()) {
-                // Add the ticket to the queue if it's not already running.
-                // Remove tickets that have conflicting requirements.
-                is SchedulerStatus.QueueTicket ->
-                    if (status.ticket !in active) {
-                        queued.removeIf {
-                            val shouldRemove = (it.requirements intersect status.ticket.requirements).isNotEmpty()
+                // Figure out what to do with the new ticket
+                is SchedulerStatus.QueueTicket -> {
+                    if (status.ticket in active) continue
 
-                            if (shouldRemove)
-                                launch { ticketFinishFlow.emit(SchedulerStatus.TicketFinish(it, true)) }
+                    when (
+                        val action = schedulingPolicy.schedule(
+                            status.ticket,
+                            // Making defensive copies to prevent modification
+                            active.keys.toSet(), queued.toSet(), standby.toList()
+                        )
+                    ) {
+                        // Cancel the ticket
+                        is SchedulingPolicy.TicketAction.Drop ->
+                            launch { ticketFinishFlow.emit(SchedulerStatus.TicketFinish(status.ticket, true)) }
 
-                            shouldRemove
+                        // Add the ticket to the standby list
+                        is SchedulingPolicy.TicketAction.Standby -> standby.add(status.ticket)
+
+                        // Add the ticket to the queue. If dropExisting is true, cancel any active tickets that have
+                        // conflicting requirements. Otherwise, move them to the standby list.
+                        is SchedulingPolicy.TicketAction.Queue -> {
+                            queued.removeIf {
+                                val shouldRemove = (it.requirements intersect status.ticket.requirements).isNotEmpty()
+
+                                if (shouldRemove && action.dropExisting)
+                                    launch { ticketFinishFlow.emit(SchedulerStatus.TicketFinish(it, true)) }
+                                else standby.add(it)
+
+                                shouldRemove
+                            }
+                            queued.add(status.ticket)
+
+                            // Cancel active tickets that have conflicting requirements
+                            active
+                                .filterKeys { (it.requirements intersect status.ticket.requirements).isNotEmpty() }
+                                .forEach { it.value.cancel() }
                         }
-                        queued.add(status.ticket)
-
-                        // Cancel active tickets that have conflicting requirements
-                        active
-                            .filterKeys { (it.requirements intersect status.ticket.requirements).isNotEmpty() }
-                            .forEach { it.value.cancel() }
                     }
-
-                    else continue
+                }
 
                 // Remove the ticket from the active set
                 is SchedulerStatus.TicketFinish -> active.remove(status.ticket)
+            }
+
+            // Promote standby tickets to the queue if possible
+            val availableTickets = standby.filter { ticket ->
+                ((active.keys + queued).flatMap { it.requirements } intersect ticket.requirements).isEmpty()
+            }.toMutableList()
+
+            while (true) {
+                // Break if there are no more tickets to promote (toNonEmptyListOrNull returns null if empty)
+                val standbyNel = availableTickets.toNonEmptyListOrNull() ?: break
+
+                val ticketToRemove = schedulingPolicy.select(standbyNel)
+
+                // No need to cancel any conflicting active tickets - there shouldn't be any
+                // Queued tickets will then be activated after this loop
+                queued.add(ticketToRemove)
+
+                availableTickets.removeIf { (it.requirements intersect ticketToRemove.requirements).isNotEmpty() }
             }
 
             // Start any queued tickets if possible
