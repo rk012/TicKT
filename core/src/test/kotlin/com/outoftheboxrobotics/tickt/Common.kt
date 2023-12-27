@@ -16,6 +16,10 @@ enum class TestKeys : TicketKey {
 val allTestKeys = TestKeys.entries.toNonEmptyListOrNull()!!
 
 // Helper function to call runBlocking with a timeout
-fun runTimeoutBlocking(timeout: Long = 100, block: suspend CoroutineScope.() -> Unit) = runBlocking {
-    withTimeout(timeout) { ticketSchedulerContext(allTestKeys, block = block) }
+fun runTimeoutBlocking(
+    timeout: Long = 100,
+    schedulingPolicy: SchedulingPolicy = DefaultSchedulingPolicy,
+    block: suspend CoroutineScope.() -> Unit
+) = runBlocking {
+    withTimeout(timeout) { ticketSchedulerContext(allTestKeys, schedulingPolicy, block) }
 }

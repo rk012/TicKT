@@ -125,6 +125,7 @@ class TicketScheduler(
                 // No need to cancel any conflicting active tickets - there shouldn't be any
                 // Queued tickets will then be activated after this loop
                 queued.add(ticketToRemove)
+                standby.remove(ticketToRemove)
 
                 availableTickets.removeIf { (it.requirements intersect ticketToRemove.requirements).isNotEmpty() }
             }
